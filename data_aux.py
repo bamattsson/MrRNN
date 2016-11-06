@@ -45,3 +45,8 @@ def batch_iter(data, batch_size, num_epochs, shuffle=True):
             if end_index - start_index != batch_size:
                 continue
             yield data[indices[start_index:end_index]]
+
+def random_embedding(vocabulary_size, embedding_dim = 128, value_range = 1.):
+    """Creates word embedding matrix from scratch."""                                           
+    W_embeddings = np.random.uniform(-value_range,value_range, (vocabulary_size, embedding_dim))
+    return W_embeddings
