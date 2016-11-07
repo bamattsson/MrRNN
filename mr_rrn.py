@@ -1,8 +1,12 @@
 import numpy as np
 import tensorflow as tf
 
-def build_graph(embedding_shape, num_seq, num_steps, batch_size, n_hidden_encoder, n_hidden_context, n_hidden_decoder, learning_rate):
+def build_graph(embedding_shape, num_seq, num_steps, batch_size, n_hidden_encoder, n_hidden_context, n_hidden_decoder, learning_rate, gradient_clipping=0):
     """Constructs the graph."""
+    # TODO:
+    # a lot of unpacking/packing of variables, probably not very efficient
+    # choose init values for initialization
+
     # Input
     # TODO: variable batch_size
     sequence_input = tf.placeholder(tf.int32, [batch_size, num_seq, num_steps])
@@ -61,7 +65,11 @@ def build_graph(embedding_shape, num_seq, num_steps, batch_size, n_hidden_encode
         total_loss = tf.reduce_mean(losses)
 
     # Do training
-    train_step = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(total_loss) 
+    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+    gvs = optimizer.compute_gradients(total_loss)
+    if gradient_clipping > 0:
+        gvs = [(tf.clip_by_value(grad, -1.*gradient_clipping, 1.*gradient_clipping), var) for grad, var in gvs]
+    train_step = optimizer.apply_gradients(gvs)
 
     return (vocab_input, sequence_input, total_loss, train_step)
 
