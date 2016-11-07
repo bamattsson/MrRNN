@@ -17,7 +17,10 @@ def build_graph(embedding_shape, num_seq, num_steps, batch_size, n_hidden_encode
 
         sequence = tf.unpack(sequence, axis=1) # list(num_seq * [batch_size, num_steps, emb_dim])
         x = sequence[:-1] # list(num_seq - 1 *[batch_size, num_steps, emb_dim])
-        y = sequence[1:] # list(num_seq - 1 *[batch_size, num_steps, emb_dim])
+        y_input = sequence[1:] # list(num_seq - 1 *[batch_size, num_steps, emb_dim])
+        y_input = [tf.unpack(y_seq, axis = 1) for y_seq in y_input] # packing up time steps
+        y_input = [[tf.zeros([batch_size, emb_dim])] + y_seq[:-1] for y_seq in y_input] # adding initial time step and removing last
+        # y_input: list(num_seq - 1 *list(num_steps * [batch_size, emd_dim]))
 
     # Encoder RNN
     final_states_enc = _build_encoders(x, n_hidden_encoder, batch_size)
@@ -34,15 +37,17 @@ def build_graph(embedding_shape, num_seq, num_steps, batch_size, n_hidden_encode
     init_state_dec = [tf.tanh(tf.matmul(fs, W_con2dec) + b_con2dec) for fs in output_context]
 
     # Decoder RNN
-    output_dec = _build_decoders(y, n_hidden_decoder, init_state_dec, batch_size, emb_dim)
+    output_dec = _build_decoders(y_input, n_hidden_decoder, init_state_dec, batch_size, emb_dim)
 
     # To output
     with tf.variable_scope('output'):
         W_out = tf.get_variable('W_out', [n_hidden_decoder, emb_dim])
+        E_out = tf.get_variable('E_out', [emb_dim, emb_dim])
         b_out = tf.get_variable('b_out', [emb_dim])
 
         output_dec = sum(output_dec,[])
-        logits = [tf.matmul(o, W_out) + b_out for o in output_dec] # TODO: Missing terms
+        y_input = sum(y_input,[])
+        logits = [tf.matmul(o, W_out) + tf.matmul(y, E_out) + b_out for o, y in zip(output_dec, y_input)]
         logits_words = [tf.matmul(l, W_embedding, transpose_b = True) for l in logits] #TODO: not very efficient, implement(?): http://sebastianruder.com/word-embeddings-softmax/
         logits_words = tf.pack(logits_words,axis=1)
         logits_words = tf.reshape(logits_words, [-1, embedding_shape[0]])
@@ -81,9 +86,7 @@ def _build_decoders(y_sequences, n_hidden_dec, init_states, batch_size, emb_dim)
         cell = tf.nn.rnn_cell.GRUCell(n_hidden_dec)
         outputs_list = []
         for (y_seq, init_s) in zip(y_sequences, init_states):
-            y = tf.unpack(y_seq, axis = 1) # list(num_steps * [batch_size, emb_dim])
-            y = [tf.zeros([batch_size, emb_dim])] + y 
-            outputs, _ = tf.nn.rnn(cell, y[:-1], initial_state = init_s, scope = dec_scope)
+            outputs, _ = tf.nn.rnn(cell, y_seq, initial_state = init_s, scope = dec_scope)
             tf.get_variable_scope().reuse_variables()
             outputs_list.append(outputs)
     return outputs_list
