@@ -1,7 +1,9 @@
+import gc
 import numpy as np
 from tensorflow.contrib import learn
+from gensim.models.word2vec import Word2Vec
 
-def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens = 20, min_frequency = 10):
+def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens = 20, vocab_processor = None, min_frequency = 10):
     """Generates data set from ubuntu conversation history.
 
     Requieres unzipped version of www.iulianserban.com/Files/UbuntuDialogueCorpus.zip placed in map ./data
@@ -13,6 +15,7 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
     y_data -- as x_data but padded in the end of each utterance
     vocab_processor -- vocab_processor containing token-value encoding
     """
+    # TODO: add argument vocab_processor to be able to generate test with same embedding
     # Get data from file
     data_str = []
     path = './data/raw_' + data_set + '_text.txt'
@@ -34,10 +37,11 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
                 data_str.append(row)
 
     # Create token-value encoding
-    # TODO: change min_frequency to max_vocab_size in alignment with article
-    list_iterator = _flatten_list(data_str)
-    vocab_processor = learn.preprocessing.VocabularyProcessor(max_tokens, min_frequency = min_frequency)
-    vocab_processor = vocab_processor.fit(list_iterator)
+    if vocab_processor is None:
+        # TODO: change min_frequency to max_vocab_size in alignment with article
+        list_iterator = _flatten_list(data_str)
+        vocab_processor = learn.preprocessing.VocabularyProcessor(max_tokens, min_frequency = min_frequency)
+        vocab_processor = vocab_processor.fit(list_iterator)
 
     # Transform data tokens-values
     data = []
@@ -48,6 +52,7 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
     y_data = np.array(data) # Paddings in the end
 
     # Create x_data that has paddings in the beginning
+    # TODO: this could be done more memory efficiently when batches are generated
     x_data = np.zeros_like(y_data)
     for i in range(y_data.shape[0]):
         for j in range(y_data.shape[1]):
@@ -56,6 +61,9 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
                     x_data[i,j,-(k+1):] = y_data[i,j,:k+1]
                     break
 
+    # Remove dimensions not used in model
+    x_data = x_data[:,:-1,:]
+    y_data = y_data[:,1:,:]
     return x_data, y_data, vocab_processor
 
 def generate_test_data_sequence(examples=50000, num_seq = 4, num_steps = 20):
@@ -84,13 +92,16 @@ def generate_test_data_sequence(examples=50000, num_seq = 4, num_steps = 20):
     return X
 
 def batch_iter(data, batch_size, num_epochs, shuffle=True):
-    """Generates a batch iterator for a dataset."""
-    data = np.array(data)
-    data_size = len(data)
-    if len(data) % batch_size == 0:
-        num_batches_per_epoch = int(len(data) / batch_size)
+    """Generates a batch iterator for a dataset.
+
+    Arguments:
+    data -- tuple of np.ndarrays containing the data
+    """
+    data_size = len(data[0])
+    if len(data[0]) % batch_size == 0:
+        num_batches_per_epoch = int(len(data[0]) / batch_size)
     else:
-        num_batches_per_epoch = int(len(data) / batch_size) + 1
+        num_batches_per_epoch = int(len(data[0]) / batch_size) + 1
     for epoch in range(num_epochs):
         # Shuffle the data at each epoch
         if shuffle:
@@ -102,11 +113,32 @@ def batch_iter(data, batch_size, num_epochs, shuffle=True):
             end_index = min((batch_num + 1) * batch_size, data_size)
             if end_index - start_index != batch_size:
                 continue
-            yield data[indices[start_index:end_index]]
+            yield tuple([d[indices[start_index:end_index]] for d in data])
 
-def random_embedding(vocabulary_size, embedding_dim = 128, value_range = .1):
-    """Creates word embedding matrix from scratch."""                                           
-    W_embeddings = np.random.uniform(-value_range,value_range, (vocabulary_size, embedding_dim))
+def pretrained_embedding(vocab_processor):
+    """Creates word embedding matrix from GoogleNews w2v.
+
+    Requieres google news w2v downloaded from https://code.google.com/archive/p/word2vec/ in data
+    """
+    w2v = Word2Vec.load_word2vec_format('data/GoogleNews-vectors-negative300.bin', binary=True)
+    w2v.init_sims(replace=True)
+    gc.collect()
+    words = [vocab_processor.vocabulary_.reverse(i) for i in range(vocab_processor.vocabulary_.__len__())]
+
+    W_embeddings = []
+    for w in words:
+        try:
+            W_embeddings.append(w2v.__getitem__(w))
+        except KeyError:
+            W_embeddings.append(np.random.uniform(-0.1, 0.1, 300)) # Boundries makes variance equal as the ones from google
+    del w2v
+    gc.collect()
+    W_embeddings = np.array(W_embeddings)
+    return W_embeddings
+
+def random_embedding(vocab_processor, embedding_dim = 128, value_range = .1):
+    """Creates word embedding matrix from scratch."""
+    W_embeddings = np.random.uniform(-value_range,value_range, (len(vocab_processor.vocabulary_), embedding_dim))
     return W_embeddings
 
 def _flatten_list(list_):
