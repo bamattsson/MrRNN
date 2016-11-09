@@ -11,8 +11,8 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
     NB: each __eot__ token is considered to end the turn (and what in the article is called utterance). __eou__ is just a pause and therefore considered to be a token without any specific meaning.
 
     Returns:
-    x_data -- 3-dim matrix with [num_data, max_utterances, max_token], padded in the beggining of each utterance
-    y_data -- as x_data but padded in the end of each utterance
+    data -- 3-dim matrix with [num_data, max_utterances, max_token], padded in the end of each utterance
+    data_len -- 2-dim matrix [num_data, max_utterances], length of each utterance
     vocab_processor -- vocab_processor containing token-value encoding
     """
     # TODO: add argument vocab_processor to be able to generate test with same embedding
@@ -49,22 +49,18 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
         tmp = np.array(list(vocab_processor.transform(row)))
         tmp = np.pad(tmp,[[0, max_utterances - len(tmp)],[0,0]], 'constant')
         data.append(tmp)
-    y_data = np.array(data) # Paddings in the end
+    data = np.array(data) # Paddings in the end
 
-    # Create x_data that has paddings in the beginning
-    # TODO: this could be done more memory efficiently when batches are generated
-    x_data = np.zeros_like(y_data)
-    for i in range(y_data.shape[0]):
-        for j in range(y_data.shape[1]):
-            for k in range(y_data.shape[2]-1,-1,-1):
-                if y_data[i,j,k] != 0:
-                    x_data[i,j,-(k+1):] = y_data[i,j,:k+1]
+    # Create data_len that contains information about how long each utterance is
+    data_len = np.zeros(data.shape[:2])
+    for i in range(data.shape[0]):
+        for j in range(data.shape[1]):
+            for k in range(data.shape[2]-1,-1,-1):
+                if data[i,j,k] != 0:
+                    data_len[i,j] = k + 1
                     break
 
-    # Remove dimensions not used in model
-    x_data = x_data[:,:-1,:]
-    y_data = y_data[:,1:,:]
-    return x_data, y_data, vocab_processor
+    return data, data_len, vocab_processor
 
 def generate_test_data_sequence(examples=50000, num_seq = 4, num_steps = 20):
     """Generate a simple test sequence.

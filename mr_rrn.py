@@ -9,36 +9,41 @@ def build_graph(embedding_shape, num_seq, num_steps, batch_size, n_hidden_encode
 
     # Input
     # TODO: variable batch_size
-    x_input = tf.placeholder(tf.int32, [batch_size, num_seq - 1, num_steps])
-    y_input = tf.placeholder(tf.int32, [batch_size, num_seq - 1, num_steps])
-    # TODO: would probably be more efficient to split them up after embedding lookup
-    
+    sequence_input = tf.placeholder(tf.int32, [batch_size, num_seq, num_steps])
+    length_input = tf.placeholder(tf.int32, [batch_size, num_seq]) # how many num_steps each utterance contains
+
     # Get embedding
     with tf.device('/cpu:0'), tf.name_scope('embedding'):
         # TODO: paper wants different i/o embeddings?
         vocab_input = tf.placeholder(tf.float32, shape = embedding_shape)
         emb_dim = embedding_shape[1]
         W_embedding = tf.Variable(vocab_input, name='W') # [vocab_size, emb_dim]
+        sequence_data = tf.nn.embedding_lookup(W_embedding, sequence_input) # [batch_size, num_seq, num_steps, emb_dim]
+        sequence_data = tf.unpack(sequence_data, axis=1) # list(num_seq*[batch_size, num_steps, emb_dim])
+        length_data = tf.unpack(length_input, axis=1) # list(num_seq*[batch_size])
+
 
         # Process x
-        x_data = tf.nn.embedding_lookup(W_embedding, x_input) # [batch_size, num_seq -1, num_steps, emb_dim]
-        x_data = tf.unpack(x_data, axis=1) # list(num_seq-1*[batch_size, num_steps, emb_dim])
+        x_data = sequence_data[:-1] # list(num_seq-1*[batch_size, num_steps, emb_dim])
+        x_data_length = length_data[:-1] # list(num_seq-1*[batch_size])
 
         # Process y
-        y_data = tf.nn.embedding_lookup(W_embedding, y_input) # [batch_size, num_seq -1, num_steps, emb_dim]
-        y_data = tf.unpack(y_data, axis=1) # list(num_seq-1*[batch_size, num_steps, emb_dim])
+        y_data = sequence_data[1:] # list(num_seq-1*[batch_size, num_steps, emb_dim])
+        y_data_length = length_data[1:] # list(num_seq-1*[batch_size])
         y_data = [tf.unpack(y_seq, axis = 1) for y_seq in y_data]
         y_data = [[tf.zeros([batch_size, emb_dim])] + y_seq[:-1] for y_seq in y_data]
         # y_data: list(num_seq - 1 *list(num_steps * [batch_size, emd_dim]))
 
     # Encoder RNN
-    final_states_enc = _build_encoders(x_data, n_hidden_encoder, batch_size)
+    final_states_enc = _build_encoders(x_data, x_data_length, n_hidden_encoder, batch_size)
 
     # Context RNN
     with tf.variable_scope('context') as con_scope:
+        context_length = tf.cast(tf.greater(length_input, 0), dtype=tf.int32)
+        context_length = tf.reduce_sum(context_length, 1)
         init_state_con = tf.zeros([batch_size, n_hidden_context])
         context_cell = tf.nn.rnn_cell.GRUCell(n_hidden_context)
-        output_context, _ = tf.nn.rnn(context_cell, final_states_enc, initial_state = init_state_con, scope = con_scope)
+        output_context, _ = tf.nn.rnn(context_cell, final_states_enc, initial_state = init_state_con, sequence_length = context_length, scope = con_scope)
 
     # Context to decoder
     W_con2dec = tf.get_variable('W_con2dec', [n_hidden_context, n_hidden_decoder])
@@ -46,7 +51,7 @@ def build_graph(embedding_shape, num_seq, num_steps, batch_size, n_hidden_encode
     init_state_dec = [tf.tanh(tf.matmul(fs, W_con2dec) + b_con2dec) for fs in output_context]
 
     # Decoder RNN
-    output_dec = _build_decoders(y_data, n_hidden_decoder, init_state_dec, batch_size, emb_dim)
+    output_dec = _build_decoders(y_data, y_data_length, n_hidden_decoder, init_state_dec, batch_size, emb_dim)
 
     # To output
     with tf.variable_scope('output'):
@@ -63,7 +68,8 @@ def build_graph(embedding_shape, num_seq, num_steps, batch_size, n_hidden_encode
     
     # Calculate loss
     with tf.variable_scope('loss'):
-        losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits_words, tf.reshape(y_input, [-1]))
+        y_data_input = tf.slice(sequence_input, [0,1,0], [-1,-1,-1])
+        losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits_words, tf.reshape(y_data_input, [-1]))
         total_loss = tf.reduce_mean(losses)
 
     # Do training
@@ -73,30 +79,30 @@ def build_graph(embedding_shape, num_seq, num_steps, batch_size, n_hidden_encode
         gvs = [(tf.clip_by_value(grad, -1.*gradient_clipping, 1.*gradient_clipping), var) for grad, var in gvs]
     train_step = optimizer.apply_gradients(gvs)
 
-    return (vocab_input, x_input, y_input, total_loss, train_step)
+    return (vocab_input, sequence_input, length_input, total_loss, train_step)
 
-def _build_encoders(x_sequences, n_hidden_enc, batch_size):
+def _build_encoders(x_sequences, x_length, n_hidden_enc, batch_size):
     # TODO: bidirectional?
     # x_sequences - list(num_seq - 1 *[batch_size, num_steps, emb_dim])
     with tf.variable_scope('encoder') as enc_scope:
         init_state = tf.zeros([batch_size, n_hidden_enc])
         cell = tf.nn.rnn_cell.GRUCell(n_hidden_enc)
         final_states = []
-        for x_seq in x_sequences:
+        for (x_seq, x_len) in zip(x_sequences, x_length):
             x = tf.unpack(x_seq, axis = 1) # list(num_steps * [batch_size, emb_dim])
-            _, final_state = tf.nn.rnn(cell, x, initial_state = init_state, scope = enc_scope)
+            _, final_state = tf.nn.rnn(cell, x, initial_state = init_state, sequence_length = x_len, scope = enc_scope)
             tf.get_variable_scope().reuse_variables()
             final_states.append(final_state)
     return final_states
 
-def _build_decoders(y_sequences, n_hidden_dec, init_states, batch_size, emb_dim):
+def _build_decoders(y_sequences, y_length, n_hidden_dec, init_states, batch_size, emb_dim):
     # TODO: bidirectional?
     # y_sequences - list(num_seq - 1 *[batch_size, num_steps, emb_dim])
     with tf.variable_scope('decoder') as dec_scope:
         cell = tf.nn.rnn_cell.GRUCell(n_hidden_dec)
         outputs_list = []
-        for (y_seq, init_s) in zip(y_sequences, init_states):
-            outputs, _ = tf.nn.rnn(cell, y_seq, initial_state = init_s, scope = dec_scope)
+        for (y_seq, y_len, init_s) in zip(y_sequences, y_length, init_states):
+            outputs, _ = tf.nn.rnn(cell, y_seq, initial_state = init_s, sequence_length = y_len, scope = dec_scope)
             tf.get_variable_scope().reuse_variables()
             outputs_list.append(outputs)
     return outputs_list
