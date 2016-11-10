@@ -65,6 +65,8 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
 def generate_test_data_sequence(examples=50000, num_seq = 4, num_steps = 20):
     """Generate a simple test sequence.
 
+    Data sequence with either 1 or 2 (3 is end of turn)
+
     From the example at: http://r2rt.com/recurrent-neural-networks-in-tensorflow-i.html
     """
     X = np.zeros([examples, num_seq, num_steps])
@@ -72,20 +74,22 @@ def generate_test_data_sequence(examples=50000, num_seq = 4, num_steps = 20):
         for j in range(num_seq*num_steps):
             jj, kk = divmod(j,num_steps)
             if ((j + 1) % num_steps == 0):
-                X[i,jj, kk] = 2 # EOL character
+                X[i,jj, kk] = 3 # EOL character
                 continue
             threshold = 0.5
             j3, k3 = divmod(j - 3, num_steps)
             j8, k8 = divmod(j - 8, num_steps)
-            if j >= 3 and X[i,j3, k3] == 1:
+            if j >= 3 and X[i,j3, k3] == 2:
                 threshold += 0.5
-            if j >= 8 and X[i,j8, k8] == 1:
+            if j >= 8 and X[i,j8, k8] == 2:
                 threshold -= 0.25
             if np.random.rand() > threshold:
-                X[i,jj,kk] = 0
-            else:
                 X[i,jj,kk] = 1
-    return X
+            else:
+                X[i,jj,kk] = 2
+
+    L = num_steps*np.ones([examples, num_seq])
+    return X, L
 
 def batch_iter(data, batch_size, num_epochs, shuffle=True):
     """Generates a batch iterator for a dataset.
