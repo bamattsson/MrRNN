@@ -25,7 +25,7 @@ def build_graph(coarse_kwargs, n_hidden_coarse_prediction, nl_kwargs, learning_r
 
     # Build coarse HRED graph
     with tf.variable_scope('coarse_sub-model'), tf.name_scope('coarse_sub-model'):
-        coarse_total_loss = _build_HRED_graph(coarse_sequence_input, coarse_length_input, coarse_W_embedding, **coarse_kwargs)
+        coarse_losses, _ = _build_HRED_graph(coarse_sequence_input, coarse_length_input, coarse_W_embedding, **coarse_kwargs)
 
     # Build coarse prediction encoder graph
     with tf.variable_scope('coarse_pred_encoder'), tf.name_scope('coarse_pred_encoder'):
@@ -33,12 +33,13 @@ def build_graph(coarse_kwargs, n_hidden_coarse_prediction, nl_kwargs, learning_r
         sliced_coarse_len_input = tf.slice(coarse_length_input,[0,1],[-1,-1])
         coarse_prediction_states = _build_coarse_prediction_encoder(sliced_coarse_seq_input, sliced_coarse_len_input, coarse_W_embedding, n_hidden_coarse_prediction)
 
-    # Build natural language graph
+    # Build natural language HRED graph
     with tf.variable_scope('nl_sub-model'), tf.name_scope('nl_sub-model'):
-        nl_total_loss = _build_HRED_graph(nl_sequence_input, nl_length_input, nl_W_embedding, **nl_kwargs, coarse_prediction_states = coarse_prediction_states)
+        nl_losses, _ = _build_HRED_graph(nl_sequence_input, nl_length_input, nl_W_embedding, **nl_kwargs, coarse_prediction_states = coarse_prediction_states)
 
     # Do training
-    total_loss = coarse_total_loss + nl_total_loss
+    losses = tf.concat(0, [coarse_losses, nl_losses])
+    total_loss = tf.reduce_mean(losses)
     optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
     gvs = optimizer.compute_gradients(total_loss)
     if gradient_clipping > 0:
@@ -179,7 +180,7 @@ def _build_HRED_graph(sequence_input, length_input, W_embedding, embedding_shape
         losses = tf.boolean_mask(losses, not_pad_unk_mask) # Not count loss from unks and padding
         total_loss = tf.reduce_mean(losses)
 
-    return total_loss
+    return losses, total_loss
 
 def _build_encoders(x_sequences, x_length, n_hidden_enc, batch_size):
     # TODO: bidirectional?

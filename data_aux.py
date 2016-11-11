@@ -3,7 +3,30 @@ import numpy as np
 from tensorflow.contrib import learn
 from gensim.models.word2vec import Word2Vec
 
-def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens = 20, vocab_processor = None, min_frequency = 10):
+def generate_full_ubuntu_data_with_coarse(max_utterances = 6, max_tokens = 20, min_frequency_nl = 10, min_frequency_coarse = 10):
+
+    # Build natural language data set
+    nl_data_train, nl_length_train, nl_vocab_processor, train_lines =  generate_ubuntu_data(data_type = 'nl', data_set = 'training', max_utterances=max_utterances, max_tokens=max_tokens, min_frequency=min_frequency_nl)
+    nl_data_dev, nl_length_dev, _, dev_lines =  generate_ubuntu_data(data_type = 'nl', data_set = 'valid', max_utterances=max_utterances, max_tokens=max_tokens, min_frequency=min_frequency_coarse, vocab_processor=nl_vocab_processor)
+
+    # Build coarse data set
+    coarse_data_train, coarse_length_train, coarse_vocab_processor, _ =  generate_ubuntu_data(data_type = 'coarse', data_set = 'train', max_utterances=max_utterances, max_tokens=max_tokens + 1, use_lines = train_lines)
+    coarse_data_dev, coarse_length_dev, _, _ =  generate_ubuntu_data(data_type = 'coarse', data_set = 'valid', max_utterances=max_utterances, max_tokens=max_tokens + 1, use_lines=dev_lines, vocab_processor=coarse_vocab_processor)
+
+    data_dictionary = {'nl_data_train' : nl_data_train,
+        'nl_length_train' : nl_length_train,
+        'nl_data_dev' : nl_data_dev,
+        'nl_length_dev' : nl_length_dev,
+        'nl_vocab_processor' : nl_vocab_processor,
+        'coarse_data_train' : coarse_data_train,
+        'coarse_length_train' : coarse_length_train,
+        'coarse_data_dev' : coarse_data_dev,
+        'coarse_length_dev' : coarse_length_dev,
+        'coarse_vocab_processor' : coarse_vocab_processor,
+        }
+    return data_dictionary
+
+def generate_ubuntu_data(data_type = 'nl', data_set = 'training', max_utterances = 6, max_tokens = 20, vocab_processor = None, use_lines = None, min_frequency = 10):
     """Generates data set from ubuntu conversation history.
 
     Requieres unzipped version of www.iulianserban.com/Files/UbuntuDialogueCorpus.zip placed in map ./data
@@ -15,12 +38,18 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
     data_len -- 2-dim matrix [num_data, max_utterances], length of each utterance
     vocab_processor -- vocab_processor containing token-value encoding
     """
-    # TODO: add argument vocab_processor to be able to generate test with same embedding
+    # TODO: split up in different max_utterance and max_tokens size batches to train efficiently on entire data set
     # Get data from file
     data_str = []
-    path = './data/raw_' + data_set + '_text.txt'
+    if data_type == 'nl':
+        path = './data/raw_' + data_set + '_text.txt'
+    elif data_type == 'coarse':
+        path = './data/NounRepresentations/abstractions_' + data_set + '.txt'
+    else:
+        raise ValueError('Only \'nl\' or \'coarse\' are valid data_type arguments')
+    used_lines = set()
     with open(path) as f:
-        for line in f:
+        for i, line in enumerate(f):
             utterances = line.split('__eot__ ')
             len_conversation = len(utterances)
             if len_conversation > max_utterances:
@@ -33,7 +62,11 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
                     break
                 tmp_u = u[:-9] + " __eot__" # Changing last __eou__ to __eot__
                 row.append(tmp_u)
-            if not too_long:
+            if (use_lines is None) and not too_long:
+                used_lines.update([i])
+                data_str.append(row)
+            elif (use_lines is not None) and i in use_lines:
+                used_lines.update([i])
                 data_str.append(row)
 
     # Create token-value encoding
@@ -47,7 +80,10 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
     data = []
     for row in data_str:
         tmp = np.array(list(vocab_processor.transform(row)))
-        tmp = np.pad(tmp,[[0, max_utterances - len(tmp)],[0,0]], 'constant')
+        if tmp.shape == (0,): # TODO: why this happens should be investigated more, however happens very infrequently
+            tmp = np.zeros([max_utterances, max_tokens])
+        else:
+            tmp = np.pad(tmp,[[0, max_utterances - len(tmp)],[0,0]], 'constant')
         data.append(tmp)
     data = np.array(data) # Paddings in the end
 
@@ -60,12 +96,21 @@ def generate_data_ubuntu(data_set = 'training', max_utterances = 6, max_tokens =
                     data_len[i,j] = k + 1
                     break
 
-    return data, data_len, vocab_processor
+    return data, data_len, vocab_processor, used_lines
 
-def generate_test_data_sequence(examples=50000, num_seq = 4, num_steps = 20):
+def generate_test_data_with_coarse(examples=50000, num_seq=4, num_steps_nl=20, num_steps_coarse = 10):
+    """Generate a test sequence, including coarse data."""
+    coarse_data, coarse_length = generate_test_data(examples=examples, num_seq=num_seq, num_steps=num_steps_coarse)
+
+    nl_data, nl_length = generate_test_data(examples=examples, num_seq=num_seq, num_steps=num_steps_nl, coarse_data = coarse_data)
+
+    return coarse_data, coarse_length, nl_data, nl_length
+
+def generate_test_data(examples=50000, num_seq = 4, num_steps = 20, coarse_data = None):
     """Generate a simple test sequence.
 
     Data sequence with either 1 or 2 (3 is end of turn)
+    A log loss of slightly smaller than 0.45 means that it learnt the pattern.
 
     From the example at: http://r2rt.com/recurrent-neural-networks-in-tensorflow-i.html
     """
@@ -83,10 +128,14 @@ def generate_test_data_sequence(examples=50000, num_seq = 4, num_steps = 20):
                 threshold += 0.5
             if j >= 8 and X[i,j8, k8] == 2:
                 threshold -= 0.25
-            if np.random.rand() > threshold:
-                X[i,jj,kk] = 1
-            else:
+            if (coarse_data is not None) and coarse_data[i,jj, -2] == 2:
+                # If last token in corresponding coarse data (before EOL) is 2 then we switch probabilities
                 X[i,jj,kk] = 2
+            else:
+                if np.random.rand() > threshold:
+                    X[i,jj,kk] = 1
+                else:
+                    X[i,jj,kk] = 2
 
     L = num_steps*np.ones([examples, num_seq])
     return X, L
