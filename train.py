@@ -17,13 +17,13 @@ n_hidden_coarse_prediction = 50
 nl_kwargs = {'num_seq' : num_seq,
     'num_steps' : 20,
     'batch_size' : batch_size,
-    'n_hidden_encoder' : 50,
+    'n_hidden_encoder' : 50, # for backward and forward cell each
     'n_hidden_context' : 100, 
     'n_hidden_decoder' : 200}
 coarse_kwargs = {'num_seq' : num_seq,
     'num_steps' : nl_kwargs['num_steps'] + 1,
     'batch_size' : batch_size,
-    'n_hidden_encoder' : 100,
+    'n_hidden_encoder' : 100, # for backward and forward cell each
     'n_hidden_context' : 100,
     'n_hidden_decoder' : 200}
 

@@ -1,4 +1,6 @@
 import gc
+import os
+import sys
 import numpy as np
 from tensorflow.contrib import learn
 from gensim.models.word2vec import Word2Vec
@@ -42,12 +44,15 @@ def generate_ubuntu_data(data_type = 'nl', data_set = 'training', max_utterances
     # Get data from file
     data_str = []
     if data_type == 'nl':
-        path = './data/raw_' + data_set + '_text.txt'
+        path = './data/UbuntuDialogueCorpus/raw_' + data_set + '_text.txt'
     elif data_type == 'coarse':
-        path = './data/NounRepresentations/abstractions_' + data_set + '.txt'
+        path = './data/UbuntuDialogueCorpus/NounRepresentations/abstractions_' + data_set + '.txt'
     else:
         raise ValueError('Only \'nl\' or \'coarse\' are valid data_type arguments')
     used_lines = set()
+    if not os.path.exists(path):
+        print('You need to have UbuntuDialogueCorpus downloaded (from www.iulianserban.com/Files/UbuntuDialogueCorpus.zip) and extracted in ./data/UbuntuDialogueCorpus')
+        sys.exit()
     with open(path) as f:
         for i, line in enumerate(f):
             utterances = line.split('__eot__ ')
@@ -169,6 +174,9 @@ def pretrained_embedding(vocab_processor):
 
     Requieres google news w2v downloaded from https://code.google.com/archive/p/word2vec/ in data
     """
+    if not os.path.exists('data/GoogleNews-vectors-negative300.bin'):
+        print('You need to have google news w2v downloaded (from https://code.google.com/archive/p/word2vec/) and placed in ./data/GoogleNews-vectors-negative300.bin')
+        sys.exit()
     w2v = Word2Vec.load_word2vec_format('data/GoogleNews-vectors-negative300.bin', binary=True)
     w2v.init_sims(replace=True)
     gc.collect()

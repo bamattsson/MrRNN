@@ -6,11 +6,19 @@ def build_graph(coarse_kwargs, n_hidden_coarse_prediction, nl_kwargs, learning_r
 
     Arguments:
     coarse_kwargs -- arguments to the coarse HRED graph. See _build_HRED_graph for what to include.
+    n_hidden_coarse_prediction -- number hidden units in coarse prediction rnn
+    nl_kwargs -- arguments to the natural language HRED graph. See _build_HRED_graph for what to include.
     learning_rate -- learning rate to use in Adam optimizer
 
     Keyword arguments:
     gradient_clipping -- (default = 0) if active (i.e. > 0) gradients will be confined to (-gradient_clipping, gradient_clipping) in each dimension
     """
+    # TODO:
+    # a lot of unpacking/packing of variables, probably not very efficient
+    # choose init values for initialization
+    # summary writers and Tensorboard integration
+    # model at prediction time
+
     # Input variables
     # TODO: variable batch_size, i.e. use None
     coarse_sequence_input = tf.placeholder(tf.int32, [coarse_kwargs['batch_size'], coarse_kwargs['num_seq'], coarse_kwargs['num_steps']])
@@ -31,6 +39,7 @@ def build_graph(coarse_kwargs, n_hidden_coarse_prediction, nl_kwargs, learning_r
     with tf.variable_scope('coarse_pred_encoder'), tf.name_scope('coarse_pred_encoder'):
         sliced_coarse_seq_input = tf.slice(coarse_sequence_input,[0,1,0],[-1,-1,-1])
         sliced_coarse_len_input = tf.slice(coarse_length_input,[0,1],[-1,-1])
+        # TODO: should the coarse sequence be re-fed here or should we feed embeddings from coarse sub-model
         coarse_prediction_states = _build_coarse_prediction_encoder(sliced_coarse_seq_input, sliced_coarse_len_input, coarse_W_embedding, n_hidden_coarse_prediction)
 
     # Build natural language HRED graph
@@ -76,8 +85,7 @@ def _build_coarse_prediction_encoder(sequence_input, length_input, W_embedding, 
     init_state = tf.zeros([int(length_data[0].get_shape()[0]), n_hidden])
     final_states = []
     for (z_seq, z_len) in zip(sequence_data, length_data):
-        z = tf.unpack(z_seq, axis=1)
-        _, init_state = tf.nn.rnn(cell, z, initial_state = init_state, sequence_length = z_len)
+        _, init_state = tf.nn.dynamic_rnn(cell, z_seq, initial_state = init_state, sequence_length = z_len)
         tf.get_variable_scope().reuse_variables()
         final_states.append(init_state)
     final_states = tf.pack(final_states, axis=1) # [batch_size, num_seq-1]
@@ -99,15 +107,11 @@ def _build_HRED_graph(sequence_input, length_input, W_embedding, embedding_shape
     n_hidden_decoder -- hiden state size decoder rnn
 
     Keyword arguments:
-    coarse_prediction_states -- (default None) if desired should be a tensor [batch_size, num_seq-1, coarse_emb_dim]
+    coarse_prediction_states -- (default None) if desired should be a tensor [batch_size, num_seq-1, coarse_pred_emb_dim]
     """
-    # TODO:
-    # a lot of unpacking/packing of variables, probably not very efficient
-    # choose init values for initialization
-
     # Get embedding
     with tf.device('/cpu:0'), tf.name_scope('embedding'):
-        # TODO: paper wants different i/o embeddings?
+        # TODO: paper wants different i/o embeddings? Unclear
         # TODO: this could be done outside of this function to save some time (both this and coarse_pred_encoder does this)
         emb_dim = embedding_shape[1]
         sequence_data = tf.nn.embedding_lookup(W_embedding, sequence_input) # [batch_size, num_seq, num_steps, emb_dim]
@@ -123,8 +127,7 @@ def _build_HRED_graph(sequence_input, length_input, W_embedding, embedding_shape
         # Process y
         y_data = sequence_data[1:] # list(num_seq-1*[batch_size, num_steps, emb_dim])
         y_data_length = length_data[1:] # list(num_seq-1*[batch_size])
-        y_data = [tf.unpack(y_seq, axis = 1) for y_seq in y_data]
-        y_data = [[tf.zeros([batch_size, emb_dim])] + y_seq[:-1] for y_seq in y_data]
+        y_data = [tf.concat(1, [tf.zeros([batch_size, 1, emb_dim]), tf.slice(y_seq,[0,0,0],[-1,num_steps-1,-1])]) for y_seq in y_data]
         # y_data: list(num_seq - 1 *list(num_steps * [batch_size, emd_dim]))
 
     # Encoder RNN
@@ -165,8 +168,9 @@ def _build_HRED_graph(sequence_input, length_input, W_embedding, embedding_shape
         b_out = tf.get_variable('b_out', [emb_dim])
 
         output_dec = sum(output_dec,[]) # list((num_seq - 1)*(num_steps)*[batch_size, n_hidden_dec])
-        y_data = sum(y_data,[])
-        logits = [tf.matmul(o, W_out) + tf.matmul(y, E_out) + b_out for o, y in zip(output_dec, y_data)]
+        y_data_unpacked = [tf.unpack(y_seq, axis = 1) for y_seq in y_data]
+        y_data_unpacked = sum(y_data_unpacked,[])
+        logits = [tf.matmul(o, W_out) + tf.matmul(y, E_out) + b_out for o, y in zip(output_dec, y_data_unpacked)]
         logits_words = [tf.matmul(l, W_embedding, transpose_b = True) for l in logits] #TODO: not very efficient, implement(?): http://sebastianruder.com/word-embeddings-softmax/
         logits_words = tf.pack(logits_words,axis=1)
         logits_words = tf.reshape(logits_words, [-1, embedding_shape[0]])
@@ -183,27 +187,27 @@ def _build_HRED_graph(sequence_input, length_input, W_embedding, embedding_shape
     return losses, total_loss
 
 def _build_encoders(x_sequences, x_length, n_hidden_enc, batch_size):
-    # TODO: bidirectional?
     # x_sequences - list(num_seq - 1 *[batch_size, num_steps, emb_dim])
     with tf.variable_scope('encoder'):
-        init_state = tf.zeros([batch_size, n_hidden_enc])
-        cell = tf.nn.rnn_cell.GRUCell(n_hidden_enc)
+        # TODO: unclear if natural language HRED encoder should be bidirectional or only coarse sub-model
+        cell_fw = tf.nn.rnn_cell.GRUCell(n_hidden_enc)
+        cell_bw = tf.nn.rnn_cell.GRUCell(n_hidden_enc)
+        init_state = tf.zeros([batch_size, n_hidden_enc], dtype=tf.float32)
         final_states = []
         for (x_seq, x_len) in zip(x_sequences, x_length):
-            x = tf.unpack(x_seq, axis = 1) # list(num_steps * [batch_size, emb_dim])
-            _, final_state = tf.nn.rnn(cell, x, initial_state = init_state, sequence_length = x_len)
+            _, final_state = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, x_seq, initial_state_fw = init_state, initial_state_bw = init_state, sequence_length = tf.cast(x_len, tf.int64))
             tf.get_variable_scope().reuse_variables()
-            final_states.append(final_state)
+            final_state_conc = tf.concat(1, final_state)
+            final_states.append(final_state_conc)
     return final_states
 
 def _build_decoders(y_sequences, y_length, n_hidden_dec, init_states, batch_size, emb_dim):
-    # TODO: bidirectional?
-    # y_sequences - list(num_seq - 1 list(num_steps*[batch_size, num_steps, emb_dim])
+    # y_sequences - list(num_seq - 1 *list([batch_size, num_steps, emb_dim])
     with tf.variable_scope('decoder'):
         cell = tf.nn.rnn_cell.GRUCell(n_hidden_dec)
         outputs_list = []
         for (y_seq, y_len, init_s) in zip(y_sequences, y_length, init_states):
-            outputs, _ = tf.nn.rnn(cell, y_seq, initial_state = init_s, sequence_length = y_len)
+            outputs, _ = tf.nn.dynamic_rnn(cell, y_seq, initial_state = init_s, sequence_length = y_len)
             tf.get_variable_scope().reuse_variables()
-            outputs_list.append(outputs)
+            outputs_list.append(tf.unpack(outputs, axis=1))
     return outputs_list
