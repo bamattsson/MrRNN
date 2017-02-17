@@ -14,7 +14,7 @@ def build_graph(coarse_kwargs, n_hidden_coarse_prediction, nl_kwargs, learning_r
     gradient_clipping -- (default = 0) if active (i.e. > 0) gradients will be confined to (-gradient_clipping, gradient_clipping) in each dimension
     """
     # TODO:
-    # a lot of unpacking/packing of variables, probably not very efficient
+    # a lot of unpacking/packing of variables, could be improved
     # choose init values for initialization
     # summary writers and Tensorboard integration
     # model at prediction time
@@ -39,7 +39,6 @@ def build_graph(coarse_kwargs, n_hidden_coarse_prediction, nl_kwargs, learning_r
     with tf.variable_scope('coarse_pred_encoder'), tf.name_scope('coarse_pred_encoder'):
         sliced_coarse_seq_input = tf.slice(coarse_sequence_input,[0,1,0],[-1,-1,-1])
         sliced_coarse_len_input = tf.slice(coarse_length_input,[0,1],[-1,-1])
-        # TODO: should the coarse sequence be re-fed here or should we feed embeddings from coarse sub-model
         coarse_prediction_states = _build_coarse_prediction_encoder(sliced_coarse_seq_input, sliced_coarse_len_input, coarse_W_embedding, n_hidden_coarse_prediction)
 
     # Build natural language HRED graph
@@ -111,7 +110,6 @@ def _build_HRED_graph(sequence_input, length_input, W_embedding, embedding_shape
     """
     # Get embedding
     with tf.device('/cpu:0'), tf.name_scope('embedding'):
-        # TODO: paper wants different i/o embeddings? Unclear
         # TODO: this could be done outside of this function to save some time (both this and coarse_pred_encoder does this)
         emb_dim = embedding_shape[1]
         sequence_data = tf.nn.embedding_lookup(W_embedding, sequence_input) # [batch_size, num_seq, num_steps, emb_dim]
@@ -171,7 +169,7 @@ def _build_HRED_graph(sequence_input, length_input, W_embedding, embedding_shape
         y_data_unpacked = [tf.unpack(y_seq, axis = 1) for y_seq in y_data]
         y_data_unpacked = sum(y_data_unpacked,[])
         logits = [tf.matmul(o, W_out) + tf.matmul(y, E_out) + b_out for o, y in zip(output_dec, y_data_unpacked)]
-        logits_words = [tf.matmul(l, W_embedding, transpose_b = True) for l in logits] #TODO: not very efficient, implement(?): http://sebastianruder.com/word-embeddings-softmax/
+        logits_words = [tf.matmul(l, W_embedding, transpose_b = True) for l in logits] #TODO: not very efficient, use sampled_softmax_loss from tensorflow
         logits_words = tf.pack(logits_words,axis=1)
         logits_words = tf.reshape(logits_words, [-1, embedding_shape[0]])
 
@@ -189,7 +187,6 @@ def _build_HRED_graph(sequence_input, length_input, W_embedding, embedding_shape
 def _build_encoders(x_sequences, x_length, n_hidden_enc, batch_size):
     # x_sequences - list(num_seq - 1 *[batch_size, num_steps, emb_dim])
     with tf.variable_scope('encoder'):
-        # TODO: unclear if natural language HRED encoder should be bidirectional or only coarse sub-model
         cell_fw = tf.nn.rnn_cell.GRUCell(n_hidden_enc)
         cell_bw = tf.nn.rnn_cell.GRUCell(n_hidden_enc)
         init_state = tf.zeros([batch_size, n_hidden_enc], dtype=tf.float32)
