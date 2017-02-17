@@ -2,10 +2,10 @@
 A bare-bones but working tensorflow implementation of the paper [Multiresolution Recurrent Neural Networks: An Application to Dialogue Response Generation](https://arxiv.org/abs/1606.00776). Done during 10 days as a task when applying for a job.
 
 ## Description of the files
-mr_rnn.py -- builds the graph
-train.py -- to train the model
-data_aux.py -- help functions to generate data
-NB_tests.ipynb -- IPython notebook where the test sequence can be run
+* mr_rnn.py -- builds the graph
+* train.py -- to train the model
+* data_aux.py -- help functions to generate data
+* NB_tests.ipynb -- IPython notebook where the test sequence can be run
 
 ## Comments
 Built in Python 3.5.2 with Tensorflow 0.10.0.
